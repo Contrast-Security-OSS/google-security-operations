@@ -1,0 +1,54 @@
+rule contrast_adr_sql_injection_with_dlp_alert {
+
+  meta:
+    author = "Contrast Security"
+    description = "Correlates a Contrast ADR SQL injection exploitation with a DLP data access or exfiltration alert on the same host within a 1-hour window. When ADR confirms that a SQL injection payload was executed against a database, and a DLP system independently detects sensitive data access or movement on the same database host, this provides evidence that the SQL injection may have resulted in a data breach. Uses a reference list (%contrast_dlp_product_names) to scope which DLP products participate. Note: this rule has an inherently weaker join key (hostname only) compared to WAF and EDR correlations — consider complementing with a SOAR playbook for API-based enrichment."
+    severity = "CRITICAL"
+    priority = "HIGH"
+    alerting = "true"
+    mitre_attack_tactic = "Collection, Exfiltration"
+    mitre_attack_technique = "T1530, T1567"
+    data_source = "Contrast ADR, Google Cloud DLP, Microsoft Purview, or any DLP in %contrast_dlp_product_names"
+    reference = "https://docs.contrastsecurity.com/en/adr.html"
+
+  events:
+    // ── Contrast ADR: SQL injection exploited ────────────────────────────
+    $adr.metadata.event_type = "NETWORK_HTTP"
+    $adr.metadata.vendor_name = "Contrast Security"
+    $adr.metadata.product_name = "ContrastADR"
+    $adr.security_result.category = "EXPLOIT"
+    $adr.security_result.action_details = "EXPLOITED"
+    $adr.metadata.description = "sql-injection"
+
+    // ── DLP: sensitive data alert from a known DLP product ──────────────
+    $dlp.metadata.product_name in %contrast_dlp_product_names
+
+    // ── Join: same target host (database/application host) ──────────────
+    // ADR target.hostname = application host that executes the SQL query
+    // DLP target.hostname = database host where sensitive data was detected
+    // These may or may not be the same host depending on architecture
+    $adr.target.hostname = $target_host
+    $dlp.target.hostname = $target_host
+
+  match:
+    $target_host over 1h
+
+  outcome:
+    $risk_score = max(99)
+    // ADR context
+    $attack_rule = array_distinct($adr.metadata.description)
+    $attack_result = array_distinct($adr.security_result.action_details)
+    $target_app = array_distinct($adr.target.application)
+    $target_url = array_distinct($adr.target.url)
+    $source_ip = array_distinct($adr.principal.ip)
+    $adr_console_link = array_distinct($adr.metadata.url_back_to_product)
+    // DLP context
+    $dlp_product = array_distinct($dlp.metadata.product_name)
+    $dlp_category = array_distinct($dlp.security_result.category)
+    $dlp_description = array_distinct($dlp.security_result.description)
+    $dlp_resource = array_distinct($dlp.target.resource.name)
+    $dlp_action = array_distinct($dlp.security_result.action)
+
+  condition:
+    $adr and $dlp
+}

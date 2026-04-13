@@ -1,0 +1,60 @@
+rule contrast_adr_incident_with_attack_evidence {
+
+  meta:
+    author = "Contrast Security"
+    description = "Correlates a Contrast ADR incident with its associated attack events to enrich the alert with evidence from the application runtime. Contrast ADR incidents are stateful cases created when one or more attack events are correlated by the Contrast platform. The incident provides a high-level summary, while the underlying attack events contain detailed evidence including the attack payload, code stack trace, HTTP request details, and the exact database query or system command that was affected. This rule joins the incident with all related attack events on the shared incident_id label, providing the SOC analyst with the full attack context in a single detection."
+    severity = "HIGH"
+    priority = "HIGH"
+    alerting = "true"
+    mitre_attack_tactic = "Execution, Impact"
+    mitre_attack_technique = "T1059, T1190"
+    // Validated against live data (2026-03-05):
+    //   - 2 incident events (INC-2026-88, INC-2026-89) with incident_id in additional.fields
+    //   - 27 attack events, ALL have incident_id in additional.fields
+    //   - Join key: additional.fields["incident_id"] on both event types
+
+  events:
+    // Contrast ADR incident event (GENERIC_EVENT)
+    $incident.metadata.event_type = "GENERIC_EVENT"
+    $incident.metadata.vendor_name = "Contrast Security"
+    $incident.security_result.category = "EXPLOIT"
+
+    // Contrast ADR attack event (NETWORK_HTTP)
+    $attack.metadata.event_type = "NETWORK_HTTP"
+    $attack.metadata.vendor_name = "Contrast Security"
+    $attack.security_result.category = "EXPLOIT"
+
+    // Join: both incident and attack events carry incident_id in additional.fields
+    // e.g. additional.fields["incident_id"] = "INC-2026-89"
+    // One incident maps to one or more attack events (1:N)
+    $incident.additional.fields["incident_id"] = $join_key
+    $attack.additional.fields["incident_id"] = $join_key
+
+  match:
+    $join_key over 24h
+
+  outcome:
+    $risk_score = max(90)
+    // Incident context
+    $incident_id = array_distinct($incident.additional.fields["incident_id"])
+    $incident_name = array_distinct($incident.security_result.summary)
+    $incident_severity = array_distinct($incident.additional.fields["severity"])
+    $incident_score = array_distinct($incident.additional.fields["score"])
+    $incident_url = array_distinct($incident.additional.fields["url"])
+    $incident_summary = array_distinct($incident.security_result.severity_details)
+    $recommended_actions = array_distinct($incident.additional.fields["recommended_actions"])
+    $recommended_runbooks = array_distinct($incident.additional.fields["recommended_runbooks"])
+    $related_rules = array_distinct($incident.additional.fields["related_rules"])
+    // Attack evidence (aggregated across all related attack events)
+    $attack_count = count_distinct($attack.metadata.product_log_id)
+    $attack_rules = array_distinct($attack.metadata.description)
+    $attack_sources = array_distinct($attack.principal.ip)
+    $target_apps = array_distinct($attack.target.application)
+    $target_hosts = array_distinct($attack.target.hostname)
+    $target_urls = array_distinct($attack.target.url)
+    $attack_results = array_distinct($attack.security_result.action_details)
+    $console_links = array_distinct($attack.metadata.url_back_to_product)
+
+  condition:
+    $incident and #attack >= 1
+}
